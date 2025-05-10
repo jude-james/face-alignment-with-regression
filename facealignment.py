@@ -44,58 +44,90 @@ test_images_preprocessed = preprocess(test_images, resize_scale)
 # Then resize the train points to match the new image size
 train_points_resized = resize_points(train_points, resize_scale)
 
-# define my own keypoints for SIFT to create descriptors (using original image scale of 256x256)
-predefined_points = np.array([
-    [85, 100],  # left eye
-    [170, 100],  # right eye
-    [128, 140],  # nose tip
-    [95, 180],  # left mouth corner
-    [160, 180]   # right mouth corner
-], dtype=np.float32)
+# Find the average of all the training points for initial SIFT descriptor keypoints
+average_points = np.mean(train_points_resized, axis=0)
+print("average points:\n", average_points)
 
-# Then again resize these points to match the scale
-for point in predefined_points:
-    point[0] = point[0] * resize_scale
-    point[1] = point[1] * resize_scale
+# Get a train/test split
+from sklearn.model_selection import train_test_split
 
-print("predefined points:\n", predefined_points)
+train_images_split, test_images_split, train_points_split, test_points_split = train_test_split(
+    train_images_preprocessed, train_points_resized, test_size=0.2, random_state=69
+)
 
 # create sift object
 sift = cv2.SIFT_create()
 
 def compute_descriptors(image, points):
-    size = 100 * resize_scale
-    keypoints = [cv2.KeyPoint(float(x), float(y), size) for (x, y) in points]
+    keypoint_size = 10 * resize_scale
+    keypoints = [cv2.KeyPoint(float(x), float(y), keypoint_size) for (x, y) in points]
     # Use sift.compute at the keypoint
     keypoints, descriptors = sift.compute(image, keypoints)  
     return descriptors
 
-x_train = [] # sift descriptors
-y_train = [] # training data points 
+def cascaded_regression(number_of_regressors, damping_factors, train_images, train_points):
+    num_images = len(train_images)
 
-for img, points in zip(train_images_preprocessed, train_points_resized):
-    descriptors = compute_descriptors(img, points)
-    x_train.append(descriptors.flatten())
-    y_train.append(points.flatten())
+    predicted_train_points = [None] * num_images
+    regressors = []
 
-x_train = np.array(x_train)
-y_train = np.array(y_train)
+    for i in range(number_of_regressors):
+        x_train, y_train = [], []
 
-# Create and fit the model
-model = linear_model.LinearRegression()
-model.fit(x_train, y_train)
+        for j in range(num_images):
+            img = train_images[j]
+            ground_truth_train_points = train_points[j]
 
-# TODO cascaded regression function here...
-# Loop through test images to get descriptors for model predictions
-x_test = []
+            if predicted_train_points[j] is None:
+                predicted_train_points[j] = average_points.copy()
+            
+            # Compute SIFT descriptors based on the current prediction
+            descriptors = compute_descriptors(img, predicted_train_points[j])
+            delta = (ground_truth_train_points - predicted_train_points[j]).flatten()
+
+            x_train.append(descriptors.flatten())
+            y_train.append(damping_factors[i] * delta)
+
+        x_train = np.array(x_train)
+        y_train = np.array(y_train)
+
+        model = linear_model.LinearRegression()
+        model.fit(x_train, y_train)
+        regressors.append(model)
+
+        # Now update predictions for all images
+        for k in range(num_images):
+            img = train_images[k]
+            predicted_points = predicted_train_points[k]
+            descriptors = compute_descriptors(img, predicted_points)
+
+            x_feat = descriptors.flatten().reshape(1, -1)
+            delta = model.predict(x_feat).reshape(-1, 2)
+
+            predicted_train_points[k] = predicted_train_points[k] + damping_factors[i] * delta
+
+    return regressors
+
+num_regressors = 8
+damping_factors = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.2]
+regressors = cascaded_regression(num_regressors, damping_factors, train_images_preprocessed, train_points_resized)
+
+test_predictions = []
 for img in test_images_preprocessed:
-    descriptors = compute_descriptors(img, predefined_points)
-    x_test.append(descriptors.flatten())
+    predicted_points = average_points.copy()
+    for i in range(len(regressors)):
+        regressor = regressors[i]
+        descriptors = compute_descriptors(img, predicted_points)
 
-x_test = np.array(x_test)
-# Run prediction on array of descriptors for all test images 
-prediction_points = model.predict(x_test).reshape(-1, 5, 2)
-print("final predictions shape:", prediction_points.shape)
+        x_feat = descriptors.flatten().reshape(1, -1)
+        delta = regressor.predict(x_feat).reshape(-1, 2)
+
+        predicted_points = predicted_points + damping_factors[i] * delta
+
+    test_predictions.append(predicted_points)
+
+test_predictions = np.array(test_predictions)
+print("final predictions shape:", test_predictions.shape)
 
 def visualise_pts_2(img, pts, pts2):
     plt.imshow(img, cmap='gray')
@@ -103,10 +135,8 @@ def visualise_pts_2(img, pts, pts2):
     plt.plot(pts2[:, 0], pts2[:, 1], '+g')
     plt.show()
 
-'''
-for i in range(200, 201):
-    visualise_pts_2(test_images_preprocessed[i], prediction_points[i], predefined_points)
-'''
+for i in range(200, 300):
+    visualise_pts_2(test_images_preprocessed[i], test_predictions[i], average_points)
 
 def visualise_pts(img, pts):
     plt.imshow(img, cmap='gray')
@@ -139,7 +169,6 @@ def euclid_dist(pred_pts, gt_pts):
     gt_pts = np.reshape(gt_pts, (-1, 2))
     return np.sqrt(np.sum(np.square(pred_pts - gt_pts), axis=-1))
 
-# TODO finish save as csv function, check output file is correct
 def save_as_csv(points, location = '.'):
         """
         Save the points out as a .csv file
@@ -151,5 +180,5 @@ def save_as_csv(points, location = '.'):
         np.savetxt(location + '/results_task2.csv', np.reshape(points, (points.shape[0], -1)), delimiter=',')
 
 # Resize the prediction points back to the original size
-prediction_points_resized = resize_points(prediction_points, 1 / resize_scale)
-save_as_csv(prediction_points_resized)
+test_predictions_resized = resize_points(test_predictions, 1 / resize_scale)
+save_as_csv(test_predictions_resized)
