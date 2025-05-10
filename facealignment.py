@@ -5,6 +5,41 @@ from sklearn import linear_model
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 
+# Useful functions
+def visualise_pts(img, pts):
+    plt.imshow(img, cmap='gray')
+    plt.plot(pts[:, 0], pts[:, 1], '+r')
+    plt.show()
+
+def visualise_3pts(img, pts, pts2, pts3):
+    plt.imshow(img, cmap='gray')
+    plt.plot(pts[:, 0], pts[:, 1], '+r')
+    plt.plot(pts2[:, 0], pts2[:, 1], '+g')
+    plt.plot(pts3[:, 0], pts3[:, 1], '+b')
+    plt.show()
+
+def euclid_dist(pred_pts, gt_pts):
+    """
+    Calculate the euclidean distance between pairs of points
+    :param pred_pts: The predicted points
+    :param gt_pts: The ground truth points
+    :return: An array of shape (no_points,) containing the distance of each predicted point from the ground truth
+    """
+    import numpy as np
+    pred_pts = np.reshape(pred_pts, (-1, 2))
+    gt_pts = np.reshape(gt_pts, (-1, 2))
+    return np.sqrt(np.sum(np.square(pred_pts - gt_pts), axis=-1))
+
+def save_as_csv(points, location = '.'):
+    """
+    Save the points out as a .csv file
+    :param points: numpy array of shape (no_test_images, no_points, 2) to be saved
+    :param location: Directory to save results.csv in. Default to current working directory
+    """
+    assert points.shape[0]==554, 'wrong number of image points, should be 554 test images'
+    assert np.prod(points.shape[1:])==5*2, 'wrong number of points provided. There should be 5 points with 2 values (x,y) per point'
+    np.savetxt(location + '/results_task2.csv', np.reshape(points, (points.shape[0], -1)), delimiter=',')
+
 # Load the train data using np.load
 train_data = np.load('face_alignment_training_images.npz', allow_pickle=True)
 
@@ -26,6 +61,7 @@ def preprocess(images, scale):
         resized_img = cv2.resize(img, [int(img.shape[0] * scale), int(img.shape[1] * scale)])
         # Convert to greyscale
         greyscaled_img = cv2.cvtColor(resized_img, cv2.COLOR_RGB2GRAY)
+
         preprocess_images.append(greyscaled_img)
     return np.array(preprocess_images)
 
@@ -49,15 +85,11 @@ train_points_resized = resize_points(train_points, resize_scale)
 average_points = np.mean(train_points_resized, axis=0)
 print("average points:\n", average_points)
 
-# Get a train/test split
-train_images_split, test_images_split, train_points_split, test_points_split = train_test_split(
-    train_images_preprocessed, train_points_resized, test_size=0.2, random_state=69
-)
-
 # create sift object
 sift = cv2.SIFT_create()
 
 def compute_descriptors(image, points):
+    # Use a keypoint size going of original 256x256 image size, then scale it
     keypoint_size = 10 * resize_scale
     keypoints = [cv2.KeyPoint(float(x), float(y), keypoint_size) for (x, y) in points]
     # Use sift.compute at the keypoint
@@ -104,7 +136,7 @@ def cascaded_regression(num_regressors, damping_factors, train_images, train_poi
 
     return regressors
 
-def regression_predict(images, regressors):
+def regression_predict(images, regressors, damping_factors):
     predictions = []
     for img in images:
         predicted_points = average_points.copy()
@@ -121,55 +153,43 @@ def regression_predict(images, regressors):
     
     return(np.array(predictions))
 
-num_pregressors = 8
+# --- Evaluation ---
+# TODO run some experiments
+
+# Get a train/test split
+train_images_split, test_images_split, train_points_split, test_points_split = train_test_split(
+    train_images_preprocessed, train_points_resized, test_size=0.2, random_state=69
+)
+
+# run cascaded regression with the train/test split
+num_regressors = 8
 damping_factors = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.2]
+regressors = cascaded_regression(num_regressors, damping_factors, train_images_split, train_points_split)
+predictions = regression_predict(test_images_split, regressors, damping_factors)
+print("predictions shape:", predictions.shape)
+
+# Calculate distance between the predictions and the ground truth points on the test split
+dist = euclid_dist(predictions, test_points_split)
+print(dist)
+
+# Display 5 predictions with the test split along with the ground truth points
+for i in range(5):
+    idx = np.random.randint(0, test_images_split.shape[0])
+    visualise_3pts(test_images_split[idx], predictions[idx], test_points_split[idx], average_points)
+
+# --- Final predictions ---
+
 # run cascaded regression with the train images and train points
-regressors = cascaded_regression(num_pregressors, damping_factors, train_images_preprocessed, train_points_resized)
+regressors = cascaded_regression(num_regressors, damping_factors, train_images_preprocessed, train_points_resized)
 # then get predictions on the test images
-test_predictions = regression_predict(test_images_preprocessed, regressors)
+test_predictions = regression_predict(test_images_preprocessed, regressors, damping_factors)
 print("final predictions shape:", test_predictions.shape)
 
-# TODO now run on test/train split and evaluate
-
-def visualise_pts_2(img, pts, pts2):
-    plt.imshow(img, cmap='gray')
-    plt.plot(pts[:, 0], pts[:, 1], '+r')
-    plt.plot(pts2[:, 0], pts2[:, 1], '+g')
-    plt.show()
-
-def visualise_pts(img, pts):
-    plt.imshow(img, cmap='gray')
-    plt.plot(pts[:, 0], pts[:, 1], '+r')
-    plt.show()
-
-# TODO use this for evaluating data
-def euclid_dist(pred_pts, gt_pts):
-    """
-    Calculate the euclidean distance between pairs of points
-    :param pred_pts: The predicted points
-    :param gt_pts: The ground truth points
-    :return: An array of shape (no_points,) containing the distance of each predicted point from the ground truth
-    """
-    import numpy as np
-    pred_pts = np.reshape(pred_pts, (-1, 2))
-    gt_pts = np.reshape(gt_pts, (-1, 2))
-    return np.sqrt(np.sum(np.square(pred_pts - gt_pts), axis=-1))
-
-def save_as_csv(points, location = '.'):
-        """
-        Save the points out as a .csv file
-        :param points: numpy array of shape (no_test_images, no_points, 2) to be saved
-        :param location: Directory to save results.csv in. Default to current working directory
-        """
-        assert points.shape[0]==554, 'wrong number of image points, should be 554 test images'
-        assert np.prod(points.shape[1:])==5*2, 'wrong number of points provided. There should be 5 points with 2 values (x,y) per point'
-        np.savetxt(location + '/results_task2.csv', np.reshape(points, (points.shape[0], -1)), delimiter=',')
-
-# Resize the prediction points back to the original size
+# Resize the final prediction points back to the original size
 test_predictions_resized = resize_points(test_predictions, 1 / resize_scale)
 save_as_csv(test_predictions_resized)
 
 # now finally visualise the original size predictions with the original test images
-for i in range(10):
+for i in range(5):
     idx = np.random.randint(0, test_images.shape[0])
-    visualise_pts(test_images[i], test_predictions_resized[i])
+    visualise_pts(test_images[idx], test_predictions_resized[idx])
