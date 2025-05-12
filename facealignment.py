@@ -107,6 +107,7 @@ def cascaded_regression(num_regressors, damping_factors, train_images, train_poi
         for j in range(num_images):
             img = train_images[j]
 
+            # If no previous prediction, use average points as intial prediction
             if predicted_train_points[j] is None:
                 predicted_train_points[j] = average_points.copy()
             
@@ -117,21 +118,23 @@ def cascaded_regression(num_regressors, damping_factors, train_images, train_poi
             x_train.append(descriptors.flatten())
             y_train.append(damping_factors[i] * delta)
 
-        x_train = np.array(x_train)
+        x_train = np.array(x_train) # make sure they are np arrays to avoid errors
         y_train = np.array(y_train)
 
+        # Train a linear regression model using the descriptors as input and delta value as target
         model = linear_model.LinearRegression()
         model.fit(x_train, y_train)
-        regressors.append(model)
+        regressors.append(model) # Then append to the list of regressors
 
         # Now update predictions for all images
         for k in range(num_images):
             img = train_images[k]
             descriptors = compute_descriptors(img, predicted_train_points[k])
 
-            x_feat = descriptors.flatten().reshape(1, -1)
+            x_feat = descriptors.flatten().reshape(1, -1) # make sure to reshape 
             delta = model.predict(x_feat).reshape(-1, 2)
 
+            # Update prediction using model output and dampening factor
             predicted_train_points[k] = predicted_train_points[k] + damping_factors[i] * delta
 
     return regressors
@@ -140,6 +143,7 @@ def regression_predict(images, regressors, damping_factors):
     predictions = []
     for img in images:
         predicted_points = average_points.copy()
+        # Loop through model iterations and refine the predicted points
         for i in range(len(regressors)):
             regressor = regressors[i]
             descriptors = compute_descriptors(img, predicted_points)
@@ -147,49 +151,53 @@ def regression_predict(images, regressors, damping_factors):
             x_feat = descriptors.flatten().reshape(1, -1)
             delta = regressor.predict(x_feat).reshape(-1, 2)
 
+            # increment by delta value 
             predicted_points = predicted_points + damping_factors[i] * delta
 
         predictions.append(predicted_points)
     
     return(np.array(predictions))
 
-# --- Evaluation ---
-# TODO run some experiments
-
 # Get a train/test split
 train_images_split, test_images_split, train_points_split, test_points_split = train_test_split(
-    train_images_preprocessed, train_points_resized, test_size=0.2, random_state=69
+    train_images, train_points, test_size=0.2, random_state=69
 )
 
+# Preprocess and resize all images and points
+train_imgs_split_preprocessed = preprocess(train_images_split, resize_scale)
+train_pts_split_resized = resize_points(train_points_split, resize_scale)
+test_imgs_split_preprocessed = preprocess(test_images_split, resize_scale)
+test_pts_split_resized = resize_points(test_points_split, resize_scale)
+
+num_regressors = 5
+damping_factors = np.linspace(1.0, 0.1, num_regressors).tolist()
+print("damping factors:", damping_factors)
+
 # run cascaded regression with the train/test split
-num_regressors = 8
-damping_factors = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.2]
-regressors = cascaded_regression(num_regressors, damping_factors, train_images_split, train_points_split)
-predictions = regression_predict(test_images_split, regressors, damping_factors)
+regressors = cascaded_regression(num_regressors, damping_factors, train_imgs_split_preprocessed, train_pts_split_resized)
+predictions = regression_predict(test_imgs_split_preprocessed, regressors, damping_factors)
 print("predictions shape:", predictions.shape)
 
 # Calculate distance between the predictions and the ground truth points on the test split
-dist = euclid_dist(predictions, test_points_split)
-print(dist)
+distances = euclid_dist(predictions, test_pts_split_resized)
+print("Distances:", distances)
 
-# Display 5 predictions with the test split along with the ground truth points
-for i in range(5):
-    idx = np.random.randint(0, test_images_split.shape[0])
-    visualise_3pts(test_images_split[idx], predictions[idx], test_points_split[idx], average_points)
+# Calculate the mean squared error
+mse = mean_squared_error(test_pts_split_resized.flatten(), predictions.flatten())
+print("Mean Squared Error:", mse)
 
-# --- Final predictions ---
-
-# run cascaded regression with the train images and train points
+# Final predictions
+# run cascaded regression with the full train images and train points
 regressors = cascaded_regression(num_regressors, damping_factors, train_images_preprocessed, train_points_resized)
-# then get predictions on the test images
+# then get predictions on all test images
 test_predictions = regression_predict(test_images_preprocessed, regressors, damping_factors)
 print("final predictions shape:", test_predictions.shape)
 
-# Resize the final prediction points back to the original size
+# Resize the final prediction points back to the original size and save to csv
 test_predictions_resized = resize_points(test_predictions, 1 / resize_scale)
 save_as_csv(test_predictions_resized)
 
-# now finally visualise the original size predictions with the original test images
-for i in range(5):
+# finally I can visualise the original size predictions with the original test images
+for i in range(10):
     idx = np.random.randint(0, test_images.shape[0])
     visualise_pts(test_images[idx], test_predictions_resized[idx])
