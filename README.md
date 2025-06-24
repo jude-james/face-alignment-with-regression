@@ -4,7 +4,7 @@
 
 Part 2 of my Applied Machine Learning submission, where I designed, built, tested and analysed a face alignment system. For a comprehensive overview [view the full report.](./Report.pdf)
 
-## How to Run
+## How To Run
 
 ```bash
 # 1. Clone repo
