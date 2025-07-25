@@ -8,12 +8,12 @@ Part 2 of my Applied Machine Learning submission, where I designed, built, teste
 
 ```bash
 # 1. Clone repo
-git clone https://github.com/jude-james/Face-Alignment-with-Cascaded-Regression.git
+git clone https://github.com/jude-james/face-alignment-with-regression.git
 
 # 2. Change directory
-cd "Face-Alignment-with-Cascaded-Regression"
+cd face-alignment-with-regression
 
-# 3. Install packages
+# 3. Install dependencies
 pip install numpy matplotlib opencv-python scikit-learn
 
 # 4. Run script
